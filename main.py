@@ -1,80 +1,63 @@
 import os
 import logging
-import httpx
+import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import httpx
 
+# ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-WEBHOOK_URL = "https://jthang-bot.onrender.com/webhook"
+# ✅ Load environment variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not BOT_TOKEN:
+if not TELEGRAM_TOKEN:
     raise ValueError("❌ TELEGRAM_TOKEN is missing!")
+if not OPENAI_API_KEY:
+    raise ValueError("❌ OPENAI_API_KEY is missing!")
 
-# FastAPI app
+# ✅ Initialize FastAPI & Telegram Bot
 app = FastAPI()
+application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Telegram Application
-application = Application.builder().token(BOT_TOKEN).build()
+# ✅ OpenAI API endpoint
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {OPENAI_API_KEY}",
+    "Content-Type": "application/json"
+}
 
-
-async def start(update: Update, context):
+# ✅ /start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive on Render!")
 
+# ✅ AI Response for any text
+async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
 
-async def chat_with_gpt(update: Update, context):
-    user_message = update.message.text
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": user_text}
+        ],
+        "temperature": 0.7
+    }
 
-    if not OPENAI_API_KEY:
-        await update.message.reply_text("❌ OpenAI API key is missing!")
-        return
+    async with httpx.AsyncClient() as client:
+        response = await client.post(OPENAI_URL, headers=HEADERS, json=payload)
+        ai_text = response.json()["choices"][0]["message"]["content"]
 
-    try:
-        # Call OpenAI API
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "gpt-4o-mini",  # Use GPT-4o-mini for efficiency
-            "messages": [{"role": "user", "content": user_message}]
-        }
+    await update.message.reply_text(ai_text)
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post("https://api.openai.com/v1/chat/completions",
-                                         headers=headers, json=payload)
-            data = response.json()
-            gpt_reply = data["choices"][0]["message"]["content"]
-
-        await update.message.reply_text(gpt_reply)
-
-    except Exception as e:
-        logger.error(f"Error calling OpenAI API: {e}")
-        await update.message.reply_text("⚠️ Sorry, something went wrong while contacting OpenAI.")
-
-
-# Add handlers
+# ✅ Add handlers
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_with_gpt))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_response))
 
-
-@app.on_event("startup")
-async def on_startup():
-    await application.initialize()
-    await application.start()
-    await application.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"✅ Webhook set: {WEBHOOK_URL}")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await application.stop()
-
-
+# ✅ Webhook route
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -82,7 +65,9 @@ async def webhook(request: Request):
     await application.process_update(update)
     return {"status": "ok"}
 
-
-@app.get("/")
-async def home():
-    return {"status": "Bot is alive"}
+# ✅ Set webhook on startup
+@app.on_event("startup")
+async def on_startup():
+    url = "https://jthang-bot.onrender.com/webhook"
+    await application.bot.set_webhook(url)
+    logger.info(f"✅ Webhook set: {url}")
