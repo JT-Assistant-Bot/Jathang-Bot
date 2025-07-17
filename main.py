@@ -1,66 +1,66 @@
 import os
+import tempfile
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from gtts import gTTS
 import openai
-import logging
 
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-
-logger = logging.getLogger(__name__)
-
-# Get environment variables
+# Load environment variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "5927345569"))  # Default to your ID
 
 openai.api_key = OPENAI_API_KEY
 
-# ✅ Command: /start
+# ✅ Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id != BOT_OWNER_ID:
-        await update.message.reply_text("❌ Access Denied!")
-        return
-    await update.message.reply_text("✅ Hi JT! Your personal assistant is online and ready.")
+    await update.message.reply_text("Hello! I'm your assistant. How can I help you today?")
 
-# ✅ Handle normal messages
+# ✅ Help command
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("You can ask me anything or give a command!")
+
+# ✅ Handle text messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id != BOT_OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this bot.")
-        return
+    user_message = update.message.text
+    response = get_ai_response(user_message)
 
-    user_text = update.message.text
+    # Reply in text
+    await update.message.reply_text(response)
 
+    # Convert response to voice
+    audio_file = text_to_voice(response)
+    await update.message.reply_voice(voice=open(audio_file, 'rb'))
+
+# ✅ Generate AI response
+def get_ai_response(user_message: str) -> str:
     try:
-        # Send message to OpenAI
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # Lightweight and fast
-            messages=[
-                {"role": "system", "content": "You are JT's personal assistant. Respond concisely and helpfully."},
-                {"role": "user", "content": user_text}
-            ]
+        prompt = f"You are a helpful assistant. Respond concisely.\nUser: {user_message}\nAssistant:"
+        completion = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=150,
+            temperature=0.7
         )
-
-        bot_reply = response["choices"][0]["message"]["content"].strip()
-        await update.message.reply_text(bot_reply)
-
+        return completion.choices[0].text.strip()
     except Exception as e:
-        await update.message.reply_text(f"⚠ Error: {e}")
+        return f"Error: {str(e)}"
+
+# ✅ Convert text to voice using gTTS
+def text_to_voice(text):
+    tts = gTTS(text=text, lang='en')
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+        tts.save(fp.name)
+        return fp.name
 
 # ✅ Main function
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot started successfully!")
+    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
