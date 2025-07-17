@@ -1,60 +1,50 @@
 import os
 import logging
-import asyncio
-from flask import Flask, request
+from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler
+import asyncio
 
-# Logging
+# Enable logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Flask app
-app = Flask(__name__)
-
-# Environment variable
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is NOT set!")
+    raise ValueError("❌ BOT_TOKEN environment variable is NOT set!")
 
-# Telegram Application
+WEBHOOK_URL = f"https://jthang-bot.onrender.com/webhook"
+
+# Create FastAPI app
+app = FastAPI()
+
+# Create Telegram Application
 application = Application.builder().token(BOT_TOKEN).build()
 
-# Bot command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is LIVE and working on Render!")
+# Define bot command
+async def start(update: Update, context):
+    await update.message.reply_text("✅ Bot is alive on Render using ASGI!")
 
 application.add_handler(CommandHandler("start", start))
 
-# Webhook route (sync, but runs async inside)
-@app.route("/webhook", methods=["POST"])
-def webhook():
+@app.on_event("startup")
+async def on_startup():
+    await application.bot.delete_webhook()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    asyncio.create_task(application.start())
+    logger.info(f"✅ Webhook set to: {WEBHOOK_URL}")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await application.stop()
+
+@app.post("/webhook")
+async def webhook(request: Request):
     try:
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, application.bot)
-
-        # ✅ Create and run a temporary event loop for this request
-        asyncio.run(application.process_update(update))
-
-        return "OK", 200
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.update_queue.put(update)
+        return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Error in webhook: {e}")
-        return "ERROR", 500
-
-@app.route("/")
-def index():
-    return "🤖 Bot is alive!", 200
-
-if __name__ == "__main__":
-    # Delete old webhook and set new one
-    async def setup_webhook():
-        await application.bot.delete_webhook()
-        await application.bot.set_webhook("https://jthang-bot.onrender.com/webhook")
-
-    asyncio.run(setup_webhook())
-
-    logger.info("✅ Webhook set successfully!")
-
-    # Run Flask
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        logger.error(f"❌ Error in webhook: {e}")
+        return {"status": "error"}
