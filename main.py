@@ -3,44 +3,41 @@ import logging
 import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler
 
-# Configure logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN environment variable is missing!")
+    raise ValueError("❌ BOT_TOKEN is not set!")
 
-# Initialize FastAPI app
-app = FastAPI()
+WEBHOOK_URL = f"https://jthang-bot.onrender.com/webhook"
 
-# Initialize Telegram bot Application
-application = Application.builder().token(BOT_TOKEN).build()
+# Telegram App
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Define a simple /start command
+# Handlers
 async def start(update: Update, context):
-    await update.message.reply_text("✅ Bot is alive and working via Render!")
+    await update.message.reply_text("✅ Bot is alive on Render!")
 
-# Add handler
 application.add_handler(CommandHandler("start", start))
 
-# Start the bot in background
+# Start Bot
+async def start_bot():
+    await application.initialize()
+    await application.start()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"✅ Webhook set: {WEBHOOK_URL}")
+
+# FastAPI App
+app = FastAPI()
+
 @app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(application.initialize())
-    asyncio.create_task(application.start())
-    asyncio.create_task(application.updater.start_polling())  # Not required for webhook but good for fallback
+async def on_startup():
+    asyncio.create_task(start_bot())
 
-# Stop the bot when app shuts down
-@app.on_event("shutdown")
-async def shutdown_event():
-    await application.stop()
-    await application.shutdown()
-
-# Webhook endpoint
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
@@ -49,9 +46,8 @@ async def webhook(request: Request):
         await application.process_update(update)
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
-    return {"status": "ok"}
+    return {"ok": True}
 
-# Root route
 @app.get("/")
-async def root():
-    return {"message": "✅ Bot is running on Render!"}
+async def home():
+    return {"status": "Bot running on Render!"}
