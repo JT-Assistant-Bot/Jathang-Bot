@@ -20,22 +20,24 @@ if not BOT_TOKEN:
 # ✅ Telegram Bot Application
 application = Application.builder().token(BOT_TOKEN).build()
 
-# ✅ Start command handler
+# ✅ /start handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Hello! Your bot is LIVE on Render!")
+    await update.message.reply_text("✅ Hello! Bot is LIVE on Render and fully working!")
 
-# ✅ Add handler
 application.add_handler(CommandHandler("start", start))
 
-# ✅ Webhook route
+# ✅ Webhook endpoint
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, application.bot)
 
-        # Fix: Run the async handler in a fresh loop per request
-        asyncio.run(application.process_update(update))
+        # ✅ Create a new loop in the current thread and run the task
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(application.process_update(update))
+        loop.close()
 
         return "OK", 200
     except Exception as e:
@@ -47,13 +49,18 @@ def webhook():
 def index():
     return "🤖 Bot is alive on Render!", 200
 
-# ✅ Start Flask + set webhook
+# ✅ Startup
 if __name__ == "__main__":
-    # Delete any old webhook and set new one
-    asyncio.run(application.bot.delete_webhook())
-    webhook_url = f"https://jthang-bot.onrender.com/webhook"
-    asyncio.run(application.bot.set_webhook(url=webhook_url))
+    # Reset webhook then set new one
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.bot.delete_webhook())
+    webhook_url = "https://jthang-bot.onrender.com/webhook"
+    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+    loop.close()
+
     logger.info(f"✅ Webhook set to: {webhook_url}")
 
+    # Run Flask app
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
