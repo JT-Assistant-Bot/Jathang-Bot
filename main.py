@@ -18,28 +18,32 @@ if not BOT_TOKEN or not WEBHOOK_URL:
 # ✅ Flask App
 app = Flask(__name__)
 
-# ✅ Telegram Bot Application
+# ✅ Telegram Application
 application = Application.builder().token(BOT_TOKEN).build()
 
-# ✅ Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is alive and working on Render!")
+    await update.message.reply_text("✅ Bot is alive on Render!")
 
 application.add_handler(CommandHandler("start", start))
 
-# ✅ Event Loop
-loop = asyncio.get_event_loop()
+# ✅ Create a dedicated event loop for PTB
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
-async def init_bot():
+async def run_bot():
     await application.initialize()
     await application.start()
-    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
     logger.info(f"✅ Webhook set to: {WEBHOOK_URL}/webhook")
+    await application.updater.start_polling()  # Keep background jobs alive
 
-# ✅ Run initialization in loop
-loop.run_until_complete(init_bot())
+# ✅ Run the bot in the background
+loop.create_task(run_bot())
 
-# ✅ Webhook route
+# ✅ Start the event loop in a background thread
+import threading
+threading.Thread(target=loop.run_forever, daemon=True).start()
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
