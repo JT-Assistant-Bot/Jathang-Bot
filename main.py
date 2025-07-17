@@ -1,75 +1,77 @@
 import os
 import logging
+import asyncio
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-import asyncio
 
-# Enable logging
+# ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# ✅ Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = f"https://jthang-bot.onrender.com/webhook"
+WEBHOOK_URL = "https://jthang-bot.onrender.com/webhook"  # Change if custom domain
 
 if not TOKEN:
-    raise ValueError("❌ BOT_TOKEN is NOT set in environment variables!")
+    raise ValueError("❌ BOT_TOKEN is NOT set in Render environment variables!")
 
-# Initialize Flask app
+# ✅ Flask App
 app = Flask(__name__)
 
-# Initialize Telegram Application
+# ✅ Telegram Bot Application
 application = Application.builder().token(TOKEN).build()
 
-
-# ✅ Command handler for /start
+# ✅ Handlers
 async def start(update: Update, context):
-    await update.message.reply_text("✅ Hello! Your bot is alive on Render! 🎉")
+    await update.message.reply_text("✅ Hello! Your bot is alive on Render!")
 
-
-# ✅ Message handler for any text
 async def echo(update: Update, context):
     await update.message.reply_text(f"You said: {update.message.text}")
 
-
-# Add handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-
+# ✅ Flask Routes
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Telegram bot is running on Render!"
 
-
 @app.route("/webhook", methods=["POST"])
-async def webhook():
+def webhook():
     try:
         update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
+        asyncio.get_event_loop().create_task(application.process_update(update))
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
         return "ERROR", 500
     return "OK", 200
 
-
+# ✅ Start Telegram Bot
 async def set_webhook():
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"✅ Webhook set to: {WEBHOOK_URL}")
-
+    try:
+        await application.bot.delete_webhook()  # Remove old webhook
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"✅ Webhook set to: {WEBHOOK_URL}")
+    except Exception as e:
+        logger.error(f"❌ Failed to set webhook: {e}")
 
 async def run_bot():
     await application.initialize()
     await application.start()
     await set_webhook()
 
-
+# ✅ MAIN ENTRY POINT
 if __name__ == "__main__":
-    # Start the bot asynchronously before Flask runs
-    asyncio.get_event_loop().run_until_complete(run_bot())
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(run_bot())
+    except Exception as e:
+        logger.error(f"Webhook setup failed. Switching to polling... {e}")
+        # ✅ Polling fallback if webhook fails
+        loop.run_until_complete(application.run_polling())
 
-    # ✅ Fix port issue for Render
+    # ✅ Flask Server
     port = os.environ.get("PORT")
     if not port or not port.isdigit():
         port = 10000
