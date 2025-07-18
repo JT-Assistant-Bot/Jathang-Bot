@@ -2,69 +2,61 @@ import os
 import logging
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from openai import AsyncOpenAI
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from openai import OpenAI
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Load environment variables
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Environment variables
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "5927345569"))  # Replace with your ID
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN is missing!")
-if not OPENAI_API_KEY:
-    raise ValueError("❌ OPENAI_API_KEY is missing!")
+# OpenAI client
+client = OpenAI(api_key=OPENAI_KEY)
 
-# ✅ Initialize OpenAI client
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# ✅ Allowed user (private bot)
-ALLOWED_USER_ID = 5927345569  # Your Telegram ID
-
-# ✅ FastAPI app
+# Create FastAPI app
 app = FastAPI()
 
-# ✅ Telegram app
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+# Build Telegram app
+telegram_app = ApplicationBuilder().token(TOKEN).build()
 
+# ✅ Add startup event to initialize Telegram app
+@app.on_event("startup")
+async def on_startup():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    # ✅ Set webhook
+    url = "https://jthang-bot.onrender.com/webhook"
+    await telegram_app.bot.set_webhook(url)
+    logger.info(f"✅ Webhook set successfully at {url}")
 
-# ✅ /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Hello! Your private assistant is ready. Ask me anything!")
+@app.on_event("shutdown")
+async def on_shutdown():
+    await telegram_app.stop()
+    await telegram_app.shutdown()
 
-
-# ✅ Message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    if user_id != ALLOWED_USER_ID:
-        await update.message.reply_text("⛔ Access denied. This bot is private.")
+# Handlers
+async def start(update, context):
+    if update.effective_user.id != ALLOWED_USER_ID:
         return
+    await update.message.reply_text("✅ Private Bot Active!")
 
-    try:
-        completion = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": text}
-            ]
-        )
-        answer = completion.choices[0].message["content"]
-        await update.message.reply_text(answer)
+async def chatgpt_handler(update, context):
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+    user_text = update.message.text
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": user_text}]
+    )
+    reply = response.choices[0].message.content
+    await update.message.reply_text(reply)
 
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("⚠️ Something went wrong.")
-
-
-# ✅ Register handlers
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chatgpt_handler))
 
 # ✅ Webhook endpoint
 @app.post("/webhook")
@@ -72,11 +64,4 @@ async def webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
-    return {"status": "ok"}
-
-
-@app.on_event("startup")
-async def on_startup():
-    webhook_url = "https://jthang-bot.onrender.com/webhook"
-    await telegram_app.bot.set_webhook(webhook_url)
-    logger.info(f"✅ Webhook set successfully at {webhook_url}")
+    return {"ok": True}
