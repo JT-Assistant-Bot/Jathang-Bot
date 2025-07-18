@@ -4,6 +4,9 @@ from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from openai import OpenAI
+from pydub import AudioSegment
+import speech_recognition as sr
+from datetime import datetime
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -54,9 +57,37 @@ async def chatgpt_handler(update, context):
     )
     reply = response.choices[0].message.content
     await update.message.reply_text(reply)
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice = update.message.voice
+    file = await context.bot.get_file(voice.file_id)
+
+    ogg_path = "voice.ogg"
+    wav_path = "voice.wav"
+
+    await file.download_to_drive(ogg_path)
+
+    # Convert OGG to WAV
+    AudioSegment.from_ogg(ogg_path).export(wav_path, format="wav")
+
+    # Recognize speech
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(wav_path) as source:
+        audio_data = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio_data)
+        except sr.UnknownValueError:
+            text = "Sorry, I couldn't understand the audio."
+
+    # If user asks for time
+    if "time" in text.lower():
+        now = datetime.now().strftime("%H:%M:%S")
+        await update.message.reply_text(f"The current time is {now}")
+    else:
+        await update.message.reply_text(f"You said: {text}")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chatgpt_handler))
+telegram_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
 # ✅ Webhook endpoint
 @app.post("/webhook")
