@@ -2,17 +2,14 @@ import os
 import logging
 import asyncio
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram.constants import ParseMode
-from openai import AsyncOpenAI
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import httpx
 
-# Logging setup
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -21,82 +18,66 @@ if not TELEGRAM_TOKEN:
 if not OPENAI_API_KEY:
     raise ValueError("❌ OPENAI_API_KEY is missing!")
 
-# OpenAI client
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
 # FastAPI app
 app = FastAPI()
 
-# Telegram Application
+# Telegram bot application
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# /start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is alive and ready!")
 
-# ✅ Start Command
-async def start(update: Update, context):
-    await update.message.reply_text(
-        "✅ *Bot is alive on Render!*\n\n"
-        "_Send me any message and I'll reply using AI._",
-        parse_mode=ParseMode.MARKDOWN
-    )
+# Respond to all other messages with OpenAI
+async def chat_with_openai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    logger.info(f"User message: {user_message}")
 
-
-# ✅ Handle all text messages
-async def handle_message(update: Update, context):
-    user_text = update.message.text
-    user_id = update.effective_user.id
-
-    logger.info(f"Message from {user_id}: {user_text}")
-
-    # Generate AI response
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful AI assistant that responds concisely with Markdown formatting."},
-                {"role": "user", "content": user_text}
-            ]
-        )
+        # Call OpenAI API
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": user_message}
+                    ]
+                }
+            )
+            data = response.json()
+            ai_reply = data["choices"][0]["message"]["content"]
 
-        ai_reply = response.choices[0].message.content.strip()
+        await update.message.reply_text(ai_reply)
 
-        await update.message.reply_text(
-            ai_reply,
-            parse_mode=ParseMode.MARKDOWN
-        )
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
-        await update.message.reply_text("⚠️ Sorry, something went wrong with AI response.")
+        await update.message.reply_text("⚠️ Sorry, something went wrong.")
 
-
-# ✅ Add Handlers
+# Add handlers
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_with_openai))
 
-
-# ✅ FastAPI route for Telegram webhook
-@app.post("/webhook")
-async def webhook(request: Request):
-    try:
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return JSONResponse(content={"ok": True})
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return JSONResponse(content={"ok": False}, status_code=500)
-
-
-# ✅ Root route
-@app.get("/")
-async def root():
-    return {"status": "Bot is running!"}
-
-
-# ✅ Startup event
+# Webhook setup
 @app.on_event("startup")
 async def startup():
     url = "https://jthang-bot.onrender.com/webhook"
+    await application.initialize()
+    await application.start()
     await application.bot.set_webhook(url)
     logger.info(f"✅ Webhook set: {url}")
-    asyncio.create_task(application.initialize())
-    asyncio.create_task(application.start())
+
+@app.on_event("shutdown")
+async def shutdown():
+    await application.stop()
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    await application.update_queue.put(Update.de_json(data, application.bot))
+    return {"status": "ok"}
